@@ -97,7 +97,7 @@ fabric.properties
 # Module directory
 .terraform/
 
-.env
+
 docker/.env
 .vercel
 

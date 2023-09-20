@@ -1,0 +1,56 @@
+#!groovy
+pipeline {
+    agent any
+    environment {
+        MY_ENV = sh(
+            script: 'if [[ ${BRANCH_NAME} =~ (develop|main) ]]; then echo qa; elif [[ "${BRANCH_NAME}" =~ "release-" ]]; then echo prod; else echo dev; fi',
+            returnStdout: true
+        ).trim()
+        MY_VERSION = sh(
+            script: 'if [[ "${BRANCH_NAME}" =~ "release-" ]]; then echo "${BRANCH_NAME}"; else echo "${BRANCH_NAME}.${BUILD_ID}-SNAPSHOT"; fi',
+            returnStdout: true
+        ).trim()
+    }
+    stages {
+        stage ('Configure') {
+            steps{
+                sh 'cp -f .env.${MY_ENV} .env'
+                sh 'yarn install'
+            }
+        }
+        stage ('Build') {
+            steps{
+                script{
+                        sh 'yarn run build'
+                        sh 'echo "build_info = \\"${MY_VERSION}\\"" > build/version.js'
+                        sh 'cd ./build && tar -czvf ../ui-novu-${MY_ENV}.tar.gz ./'
+                }
+            }
+        }
+        stage ('Publish') {
+            steps{
+                script{
+                    if (env.BRANCH_NAME =~ '(develop|main)') {
+                        def server = Artifactory.server "artifactory"
+                        def uploadSpec = """{
+                            "files": [
+                                {
+                                    "pattern": "./ui-novu-${MY_ENV}.tar.gz",
+                                    "target": "ui-novu-snapshot/build-files/"
+                                }
+                            ]
+                        }"""
+                        server.upload(uploadSpec)
+                    }
+                    if (env.BRANCH_NAME =~ 'release-') {
+                        docker.withRegistry('https://registry.digitalocean.com') {
+                            def dockerImage = docker.build("erelego/ui-novu:${MY_VERSION}", "-f docker/Dockerfile ${WORKSPACE}")
+                            dockerImage.push()
+                            dockerImage.push('latest')
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
